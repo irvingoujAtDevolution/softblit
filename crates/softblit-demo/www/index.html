@@ -23,6 +23,11 @@
         <option value="bgra8">Bgra8 (direct)</option>
         <option value="rgbx8">Rgbx8 (direct, alpha forced)</option>
         <option value="bgrx8">Bgrx8 (direct, alpha forced)</option>
+        <option value="rgb565">Rgb565 (packed 16-bit)</option>
+        <option value="rgb555">Rgb555 (packed 15-bit)</option>
+        <option value="gray8">Gray8 (packed)</option>
+        <option value="gray16">Gray16 (packed)</option>
+        <option value="i420">I420 (planar YUV 4:2:0)</option>
       </select>
     </label>
     <label>scaling
@@ -38,10 +43,17 @@
   <canvas id="screen" width="1024" height="640"></canvas>
   <div id="stats">starting…</div>
   <script type="module">
-    import init, { start } from "../pkg/softblit_demo.js";
+    import init, { start, start_canvas2d, demo_set_cursor, demo_import_bitmap } from "../pkg/softblit_demo.js";
     try {
       await init();
-      await start();
+      // `?renderer=canvas2d` runs the pack+putImageData reference presenter (A/B benchmark).
+      if (new URLSearchParams(location.search).get("renderer") === "canvas2d") {
+        await start_canvas2d();
+      } else {
+        await start();
+        // Test hooks for the e2e suite.
+        window.softblitDemo = { demo_set_cursor, demo_import_bitmap };
+      }
     } catch (e) {
       document.getElementById("stats").textContent = "failed to start: " + e;
       console.error(e);

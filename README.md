@@ -5,8 +5,11 @@ browser canvas with the minimum possible number of copies. Built against the rea
 IronVNC (RGB8 framebuffer → `Rgb24` packed path) and IronRDP (RGBA32 `DecodedImage` → `Rgba8`
 direct path).
 
-**Status:** v0.1 — implemented and e2e-verified (wasm32 / WebGPU). Native targets, `VideoFrame`
-ingestion, and WebGL2 fallback are not yet implemented.
+**Status:** 1.0.0-alpha.1 — the full roadmap is implemented and e2e-verified: WebGPU + WebGL2
+(CPU-expand) backends, native window target (winit example), 11 pixel formats incl. planar
+I420, cursor overlay, external-image (`ImageBitmap`/`VideoFrame`) ingestion, gather heuristic,
+worker/OffscreenCanvas rendering, DPI-aware presentation, and an A/B benchmark against the
+tuned Canvas2D path. See `CHANGELOG.md`.
 
 ## Copy accounting (normative)
 
@@ -28,9 +31,26 @@ the single `write_texture` copy.
 | `Rgba8`, `Bgra8` | direct | persistent `rgba8unorm`/`bgra8unorm` texture, per-rect `write_texture` |
 | `Rgbx8`, `Bgrx8` | direct | as above; alpha forced to 1 in the blit shader |
 | `Rgb24`, `Bgr24` | packed | raw bytes in a storage buffer, compute-pass unpack into `rgba8unorm` — no CPU repack, 25% less upload than RGBA |
+| `Rgb565`, `Rgb555` | packed | 16-bit little-endian samples, shader unpack |
+| `Gray8`, `Gray16` | packed | luminance broadcast in the shader |
+| `I420` | planar | Y/U/V planes in one buffer, BT.601 conversion in the unpack pass; dirty rects round to even coords |
 
 `Rgb24` is IronVNC's framebuffer layout (`ImgVec<RGB8>` is tightly packed, `stride == width*3`),
-so IronVNC bytes upload as-is.
+so IronVNC bytes upload as-is. Narrow tall rects are CPU-gathered tightly instead of uploading
+their row span when the span would exceed 2× the tight size. On adapters without compute
+shaders (WebGL2, `webgl` feature), packed formats are expanded to RGBA on the CPU and take the
+direct path — same pixels, verified by the `webgl` e2e project.
+
+## Composition
+
+- **Cursor overlay**: `set_cursor(Some((rgba, w, h)))` / `set_cursor_position(x, y)` — a small
+  separate texture alpha-blended in the blit pass; cursor moves cost one uniform write, zero
+  uploads, zero framebuffer churn.
+- **External images**: `import_image_bitmap(&bitmap, (x, y))` copies WebCodecs/canvas content
+  GPU-side into the persistent texture (`import_video_frame` with `--cfg web_sys_unstable_apis`).
+  Ordering is caller-sequenced: imports and uploads apply in call order.
+- **Native**: `Surface::new_windowed(window, size, desc)` (raw-window-handle); see
+  `cargo run --example native_demo`.
 
 ## Two ingestion paths, one persistent texture
 
