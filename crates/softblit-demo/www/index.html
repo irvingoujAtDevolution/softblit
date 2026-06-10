@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>softblit demo</title>
+  <style>
+    body { background: #16181d; color: #d8dbe2; font: 14px/1.5 ui-monospace, monospace; margin: 24px; }
+    h1 { font-size: 16px; font-weight: 600; }
+    canvas { border: 1px solid #3a3f4a; display: block; margin: 12px 0; background: #000; }
+    label { margin-right: 16px; }
+    select { background: #22252d; color: #d8dbe2; border: 1px solid #3a3f4a; padding: 2px 6px; }
+    #stats { color: #8fd48f; margin-top: 10px; white-space: pre; }
+  </style>
+</head>
+<body>
+  <h1>softblit — format-aware WebGPU framebuffer presentation</h1>
+  <div>
+    <label>format
+      <select id="format">
+        <option value="rgb24" selected>Rgb24 (packed, compute unpack)</option>
+        <option value="bgr24">Bgr24 (packed, compute unpack)</option>
+        <option value="rgba8">Rgba8 (direct)</option>
+        <option value="bgra8">Bgra8 (direct)</option>
+        <option value="rgbx8">Rgbx8 (direct, alpha forced)</option>
+        <option value="bgrx8">Bgrx8 (direct, alpha forced)</option>
+      </select>
+    </label>
+    <label>scaling
+      <select id="scaling">
+        <option value="fit" selected>Fit (letterbox, linear)</option>
+        <option value="fill">Fill (crop, linear)</option>
+        <option value="stretch">Stretch</option>
+        <option value="integer">Integer (nearest)</option>
+        <option value="native">Native 1:1 (nearest)</option>
+      </select>
+    </label>
+  </div>
+  <canvas id="screen" width="1024" height="640"></canvas>
+  <div id="stats">starting…</div>
+  <script type="module">
+    import init, { start } from "../pkg/softblit_demo.js";
+    try {
+      await init();
+      await start();
+    } catch (e) {
+      document.getElementById("stats").textContent = "failed to start: " + e;
+      console.error(e);
+    }
+  </script>
+</body>
+</html>

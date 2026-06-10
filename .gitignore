@@ -1,0 +1,6 @@
+/target
+node_modules/
+/crates/softblit-demo/pkg/
+/e2e/test-results/
+/e2e/playwright-report/
+*.png

@@ -1,0 +1,30 @@
+[package]
+name = "softblit-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+softblit = { path = "../softblit" }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
+console_error_panic_hook = { workspace = true }
+web-sys = { workspace = true, features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlCanvasElement",
+    "HtmlSelectElement",
+    "Location",
+    "Performance",
+    "console",
+    "OffscreenCanvas",
+    "WorkerGlobalScope",
+    "DedicatedWorkerGlobalScope",
+] }
