@@ -238,8 +238,10 @@ impl Surface {
         dst_origin: (u32, u32),
     ) -> Result<(), Error> {
         let size = (frame.display_width(), frame.display_height());
+        // `VideoFrame` has an inherent fallible `clone()` (the WebCodecs deep-copy) that shadows the
+        // `Clone` trait; wgpu wants the cheap reference clone, so call the trait method explicitly.
         self.gpu.import_external_image(
-            wgpu::ExternalImageSource::VideoFrame(frame.clone()),
+            wgpu::ExternalImageSource::VideoFrame(Clone::clone(frame)),
             dst_origin,
             size,
         )
