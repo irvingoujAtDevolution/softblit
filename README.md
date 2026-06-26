@@ -5,8 +5,11 @@ browser canvas with the minimum possible number of copies. Built against the rea
 IronVNC (RGB8 framebuffer → `Rgb24` packed path) and IronRDP (RGBA32 `DecodedImage` → `Rgba8`
 direct path).
 
-**Status:** v0.1 — implemented and e2e-verified (wasm32 / WebGPU). Native targets, `VideoFrame`
-ingestion, and WebGL2 fallback are not yet implemented.
+**Status:** 1.0.0-alpha.1 — the full roadmap is implemented and e2e-verified: WebGPU + WebGL2
+(CPU-expand) backends, native window target (winit example), 11 pixel formats incl. planar
+I420, cursor overlay, external-image (`ImageBitmap`/`VideoFrame`) ingestion, gather heuristic,
+worker/OffscreenCanvas rendering, DPI-aware presentation, and an A/B benchmark against the
+tuned Canvas2D path. See `CHANGELOG.md`.
 
 ## Copy accounting (normative)
 
@@ -28,9 +31,26 @@ the single `write_texture` copy.
 | `Rgba8`, `Bgra8` | direct | persistent `rgba8unorm`/`bgra8unorm` texture, per-rect `write_texture` |
 | `Rgbx8`, `Bgrx8` | direct | as above; alpha forced to 1 in the blit shader |
 | `Rgb24`, `Bgr24` | packed | raw bytes in a storage buffer, compute-pass unpack into `rgba8unorm` — no CPU repack, 25% less upload than RGBA |
+| `Rgb565`, `Rgb555` | packed | 16-bit little-endian samples, shader unpack |
+| `Gray8`, `Gray16` | packed | luminance broadcast in the shader |
+| `I420` | planar | Y/U/V planes in one buffer, BT.601 conversion in the unpack pass; dirty rects round to even coords |
 
 `Rgb24` is IronVNC's framebuffer layout (`ImgVec<RGB8>` is tightly packed, `stride == width*3`),
-so IronVNC bytes upload as-is.
+so IronVNC bytes upload as-is. Narrow tall rects are CPU-gathered tightly instead of uploading
+their row span when the span would exceed 2× the tight size. On adapters without compute
+shaders (WebGL2, `webgl` feature), packed formats are expanded to RGBA on the CPU and take the
+direct path — same pixels, verified by the `webgl` e2e project.
+
+## Composition
+
+- **Cursor overlay**: `set_cursor(Some((rgba, w, h)))` / `set_cursor_position(x, y)` — a small
+  separate texture alpha-blended in the blit pass; cursor moves cost one uniform write, zero
+  uploads, zero framebuffer churn.
+- **External images**: `import_image_bitmap(&bitmap, (x, y))` copies WebCodecs/canvas content
+  GPU-side into the persistent texture (`import_video_frame` with `--cfg web_sys_unstable_apis`).
+  Ordering is caller-sequenced: imports and uploads apply in call order.
+- **Native**: `Surface::new_windowed(window, size, desc)` (raw-window-handle); see
+  `cargo run --example native_demo`.
 
 ## Two ingestion paths, one persistent texture
 
@@ -68,37 +88,46 @@ A per-rect gather heuristic is a candidate v0.2 optimization — decide by bench
 
 ## Layout
 
-- `crates/softblit` — the library. GPU surface is wasm32-only for now; rect/format/scaling core is
-  platform-independent and unit-tested on the host (`cargo test -p softblit`).
-- `crates/softblit-demo` — browser demo: VNC-style animated dirty-rect workload, all six formats,
-  all five scaling modes, live `PresentStats`. `?animate=0` renders the deterministic background
-  only (used by e2e tests).
-- `e2e` — Playwright suite (CI-ready): cross-format pixel correctness against computed expected
-  values, `Native1x` letterbox geometry, animated upload-rate smoke test.
+- `crates/softblit` — the library. Compiles for wasm32 (WebGPU, plus WebGL2 via the `webgl`
+  feature) and native (`Surface::new_windowed`); logic core unit-tested on the host
+  (`cargo test -p softblit`).
+- `crates/softblit-demo` — browser demo: VNC-style animated dirty-rect workload, all eleven
+  formats, all five scaling modes, cursor/import test hooks, live `PresentStats`.
+  Query params: `?animate=0` (deterministic), `?renderer=canvas2d` (A/B benchmark),
+  `?hidpi=1` (physical-resolution rendering); `www/worker.html` runs the same workload in a
+  dedicated worker via OffscreenCanvas.
+- `e2e` — Playwright suite (CI-ready), two projects: `webgpu` (8 tests: formats, cursor
+  overlay, external-image import, geometry, worker, A/B bench, hidpi, upload rate) and `webgl`
+  (CPU-expand fallback correctness with `navigator.gpu` removed).
 
 ## Build & test
 
 ```powershell
-# lint + unit tests
+# lint + unit tests (host + wasm)
+cargo clippy --workspace
 cargo clippy --target wasm32-unknown-unknown --workspace
 cargo test -p softblit
 
-# demo
+# native smoke test (opens a window for ~5s)
+cargo run --example native_demo
+
+# demo (webgl feature enables the GL fallback in the bundle; WebGPU is still preferred)
 $env:RUSTFLAGS = "-Ctarget-feature=+simd128,+bulk-memory"
-wasm-pack build crates/softblit-demo --target web --release
+wasm-pack build crates/softblit-demo --target web --release -- --features webgl
 python -m http.server 8917 --directory crates/softblit-demo   # open /www/index.html
 
 # e2e (spawns its own server + Chrome; requires stable Chrome for headless WebGPU)
 cd e2e && npm install && npx playwright test
 ```
 
-Measured on this machine (headless Chrome 149, Intel Gen12): 60 fps, ~10 coalesced rects/frame.
+Measured on this machine (headless Chrome 149, Intel Gen12), 800x500 source with 12 moving
+rects: 60 fps, ~9 coalesced rects/frame, GPU 0.53–0.87 CPU-ms/frame & ~95 KiB/frame uploaded
+vs Canvas2D 0.57–1.11 CPU-ms & ~213 KiB/frame.
 
-## Roadmap (from the design doc)
+## Future ideas (not currently planned)
 
-- v0.2: packed-path gather heuristic, benchmark harness vs IronVNC's tuned Canvas2D path.
-- v0.3: `VideoFrame` ingestion (`copyExternalImageToTexture`) with a defined ordering model;
-  cursor overlay layer.
-- v0.4: native targets via wgpu (the GPU core is already platform-agnostic), mapped-staging
-  double buffering.
-- v1.0: WebGL2 fallback, Gray8/16, API freeze.
+- Native persistent-mapped staging ring (`Buffering::Double`) for true zero-copy decode.
+- Worker-shaped Iron* clients: the renderer is worker-proven; moving the session decode loops
+  into workers needs an `iron-remote-desktop` framework change (input/clipboard message
+  protocol across the worker boundary).
+- Gray16 windowing (level/width) for medical-style viewers.

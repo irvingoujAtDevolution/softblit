@@ -19,12 +19,9 @@
 
 mod error;
 mod format;
+mod gpu;
 mod rect;
 mod scaling;
-
-#[cfg(target_arch = "wasm32")]
-mod gpu;
-#[cfg(target_arch = "wasm32")]
 mod surface;
 
 pub use error::Error;
@@ -32,7 +29,8 @@ pub use format::PixelFormat;
 pub use rect::Rect;
 pub use scaling::ScalingMode;
 #[cfg(target_arch = "wasm32")]
-pub use surface::{FrameMut, Surface, SurfaceTarget};
+pub use surface::SurfaceTarget;
+pub use surface::{FrameMut, Surface};
 
 /// Initial configuration for a [`Surface`].
 #[derive(Clone, Copy, Debug)]

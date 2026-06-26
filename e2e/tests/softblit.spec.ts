@@ -16,6 +16,28 @@ function expectedAt(sx: number, sy: number): [number, number, number] {
 // Scaling filter + canvas readback wobble.
 const TOLERANCE = 12;
 
+// BT.601 full-range luma, matching the demo's gray conversion.
+function lumaOf([r, g, b]: [number, number, number]): [number, number, number] {
+  const l = Math.round((r * 299 + g * 587 + b * 114) / 1000);
+  return [l, l, l];
+}
+
+// Per-format expected-color transform and tolerance: 16-bit formats quantize (up to 8 per
+// channel), gray formats broadcast luma, I420 round-trips a lossy color conversion.
+const FORMATS: { value: string; tol: number; map?: (rgb: [number, number, number]) => [number, number, number] }[] = [
+  { value: 'rgb24', tol: TOLERANCE },
+  { value: 'bgr24', tol: TOLERANCE },
+  { value: 'rgba8', tol: TOLERANCE },
+  { value: 'bgra8', tol: TOLERANCE },
+  { value: 'rgbx8', tol: TOLERANCE },
+  { value: 'bgrx8', tol: TOLERANCE },
+  { value: 'rgb565', tol: 18 },
+  { value: 'rgb555', tol: 18 },
+  { value: 'gray8', tol: TOLERANCE, map: lumaOf },
+  { value: 'gray16', tol: TOLERANCE, map: lumaOf },
+  { value: 'i420', tol: 26 },
+];
+
 async function waitReady(page: Page): Promise<void> {
   const stats = page.locator('#stats');
   await expect
@@ -42,16 +64,16 @@ async function sampleCanvas(page: Page, points: [number, number][]): Promise<num
   });
 }
 
-function expectClose(actual: number[], expected: [number, number, number], label: string) {
+function expectClose(actual: number[], expected: [number, number, number], label: string, tol = TOLERANCE) {
   for (let c = 0; c < 3; c++) {
     expect
       .soft(Math.abs(actual[c] - expected[c]), `${label} channel ${c}: got ${actual}, want ${expected}`)
-      .toBeLessThanOrEqual(TOLERANCE);
+      .toBeLessThanOrEqual(tol);
   }
 }
 
 test.describe('softblit demo', () => {
-  test('all six pixel formats produce identical, correct pixels', async ({ page }) => {
+  test('all eleven pixel formats produce correct pixels', async ({ page }) => {
     await page.goto('/www/index.html?animate=0');
     await waitReady(page);
 
@@ -64,15 +86,64 @@ test.describe('softblit demo', () => {
     ];
     const expected = points.map(([cx, cy]) => expectedAt(cx / FIT, cy / FIT));
 
-    for (const format of ['rgb24', 'bgr24', 'rgba8', 'bgra8', 'rgbx8', 'bgrx8']) {
-      await page.selectOption('#format', format);
+    for (const { value, tol, map } of FORMATS) {
+      await page.selectOption('#format', value);
       // Format switch reallocates and repaints; give it a few frames.
       await page.waitForTimeout(300);
       const samples = await sampleCanvas(page, points);
       samples.forEach((rgba, i) =>
-        expectClose(rgba, expected[i], `${format} @ (${points[i][0]},${points[i][1]})`),
+        expectClose(rgba, map ? map(expected[i]) : expected[i], `${value} @ (${points[i][0]},${points[i][1]})`, tol),
       );
     }
+  });
+
+  test('cursor overlay composites with alpha over the source', async ({ page }) => {
+    await page.goto('/www/index.html?animate=0');
+    await waitReady(page);
+
+    // 40x40 overlay at source (200, 150): 8px transparent border around an opaque red core.
+    await page.evaluate(() => (window as any).softblitDemo.demo_set_cursor(200, 150, false));
+    await page.waitForTimeout(200);
+
+    // Core: source (220, 170) -> canvas (281.6, 217.6).
+    const [core, border] = await sampleCanvas(page, [
+      [282, 218],
+      [259, 195], // source (202.3, 152.3): inside the transparent border -> background gradient
+    ]);
+    expectClose(core, [255, 0, 0], 'cursor core');
+    expectClose(border, expectedAt(259 / FIT, 195 / FIT), 'cursor transparent border');
+
+    // Moving the cursor is a uniform write + re-blit; the old position must show background.
+    await page.evaluate(() => (window as any).softblitDemo.demo_set_cursor(600, 300, false));
+    await page.waitForTimeout(200);
+    const [oldSpot] = await sampleCanvas(page, [[282, 218]]);
+    expectClose(oldSpot, expectedAt(282 / FIT, 218 / FIT), 'cursor old position restored');
+  });
+
+  test('external image import (ImageBitmap / VideoFrame path) lands in the persistent texture', async ({
+    page,
+  }) => {
+    await page.goto('/www/index.html?animate=0');
+    await waitReady(page);
+
+    await page.evaluate(async () => {
+      const off = new OffscreenCanvas(64, 64);
+      const ctx = off.getContext('2d')!;
+      ctx.fillStyle = '#00ff80';
+      ctx.fillRect(0, 0, 64, 64);
+      const bitmap = await createImageBitmap(off);
+      (window as any).softblitDemo.demo_import_bitmap(bitmap, 600, 400);
+      bitmap.close();
+    });
+    await page.waitForTimeout(200);
+
+    // Center of the imported block: source (632, 432) -> canvas (808.96, 552.96).
+    const [imported, outside] = await sampleCanvas(page, [
+      [809, 553],
+      [700, 553], // left of the block: still background
+    ]);
+    expectClose(imported, [0, 255, 128], 'imported bitmap pixels');
+    expectClose(outside, expectedAt(700 / FIT, 553 / FIT), 'pixels outside the import');
   });
 
   test('Native1x centers the source with black borders', async ({ page }) => {
@@ -121,6 +192,46 @@ test.describe('softblit demo', () => {
     samples.forEach((rgba, i) =>
       expectClose(rgba, expected[i], `worker @ (${points[i][0]},${points[i][1]})`),
     );
+  });
+
+  test('A/B benchmark: GPU presenter vs Canvas2D pack+putImageData (informational)', async ({ page }) => {
+    const results: Record<string, string> = {};
+    for (const [name, url] of [
+      ['gpu', '/www/index.html'],
+      ['canvas2d', '/www/index.html?renderer=canvas2d'],
+    ] as const) {
+      await page.goto(url);
+      const stats = page.locator('#stats');
+      await expect.poll(async () => stats.textContent(), { timeout: 20_000 }).toContain('cpu ms');
+      // Let the numbers settle past warmup, then take the latest line.
+      await page.waitForTimeout(2_000);
+      results[name] = (await stats.textContent()) ?? '';
+      const cpu = Number(results[name].match(/([\d.]+) cpu ms/)?.[1]);
+      expect(cpu).toBeGreaterThan(0);
+    }
+    console.log(`[bench] gpu:      ${results.gpu.trim()}`);
+    console.log(`[bench] canvas2d: ${results.canvas2d.trim()}`);
+  });
+
+  test('hidpi mode renders at physical resolution', async ({ browser }) => {
+    const context = await browser.newContext({ deviceScaleFactor: 2, viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    await page.goto('/www/index.html?animate=0&hidpi=1');
+    await waitReady(page);
+
+    const backing = await page.evaluate(() => {
+      const c = document.getElementById('screen') as HTMLCanvasElement;
+      // clientWidth = CSS content box (excludes the 1px border).
+      return { w: c.width, h: c.height, cssW: c.clientWidth };
+    });
+    expect(backing.w).toBe(2048);
+    expect(backing.h).toBe(1280);
+    expect(backing.cssW).toBe(1024);
+
+    // Content still correct (sampleCanvas normalizes coordinates by the screenshot scale).
+    const [sample] = await sampleCanvas(page, [[512, 320]]);
+    expectClose(sample, expectedAt(512 / FIT, 320 / FIT), 'hidpi center');
+    await context.close();
   });
 
   test('animated dirty rects upload and present at interactive rates', async ({ page }) => {

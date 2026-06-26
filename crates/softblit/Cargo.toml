@@ -5,6 +5,24 @@ edition.workspace = true
 license.workspace = true
 description = "Format-aware framebuffer presentation for WebGPU: dirty-rect partial uploads, GPU-side unpacking of packed formats (RGB24), scaling-mode control."
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[features]
+default = []
+# WebGL2 backend for browsers without WebGPU; packed formats then use the CPU-expand path.
+webgl = ["wgpu/webgl"]
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(web_sys_unstable_apis)']
+
+[dependencies]
 wgpu = { workspace = true }
-web-sys = { workspace = true, features = ["HtmlCanvasElement", "OffscreenCanvas"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true, features = ["HtmlCanvasElement", "OffscreenCanvas", "ImageBitmap", "VideoFrame"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu = { workspace = true, features = ["vulkan", "dx12", "metal", "gles"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+winit = "0.30"
+pollster = "0.4"

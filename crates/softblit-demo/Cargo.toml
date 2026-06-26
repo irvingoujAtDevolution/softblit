@@ -8,6 +8,10 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# WebGL2 fallback in the underlying renderer (used when WebGPU is unavailable at runtime).
+webgl = ["softblit/webgl"]
+
 [dependencies]
 softblit = { path = "../softblit" }
 wasm-bindgen = { workspace = true }
@@ -27,4 +31,8 @@ web-sys = { workspace = true, features = [
     "OffscreenCanvas",
     "WorkerGlobalScope",
     "DedicatedWorkerGlobalScope",
+    "ImageBitmap",
+    "CssStyleDeclaration",
+    "CanvasRenderingContext2d",
+    "ImageData",
 ] }
