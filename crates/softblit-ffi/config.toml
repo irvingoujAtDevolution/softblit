@@ -1,0 +1,5 @@
+lib-name = "softblit_ffi"
+
+[dotnet]
+namespace = "Softblit.Interop"
+dylib-name = "softblit_ffi"

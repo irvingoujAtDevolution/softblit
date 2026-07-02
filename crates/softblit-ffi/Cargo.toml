@@ -1,0 +1,22 @@
+[package]
+name = "softblit-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "diplomat FFI bridge over softblit's shared-surface engine: opaque SoftblitSurface consumed from C#."
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+softblit = { path = "../softblit" }
+softblit-native = { path = "../softblit-native" }
+wgpu = { workspace = true, features = ["vulkan", "dx12"] }
+pollster = "0.4"
+tracing = "0.1"
+diplomat = { path = "D:/diplomat/macro" }
+diplomat-runtime = { path = "D:/diplomat/runtime" }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

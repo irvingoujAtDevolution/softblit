@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/softblit", "crates/softblit-demo", "crates/softblit-native", "crates/softblit-spike"]
+members = ["crates/softblit", "crates/softblit-demo", "crates/softblit-ffi", "crates/softblit-native", "crates/softblit-spike"]
 resolver = "2"
 
 [workspace.package]

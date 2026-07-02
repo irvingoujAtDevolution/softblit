@@ -345,6 +345,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "diplomat"
+version = "0.15.0"
+dependencies = [
+ "diplomat_core",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "diplomat-runtime"
+version = "0.15.1"
+
+[[package]]
+name = "diplomat_core"
+version = "0.15.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "smallvec",
+ "strck",
+ "syn",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1662,6 +1688,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "softblit-ffi"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "diplomat",
+ "diplomat-runtime",
+ "pollster",
+ "softblit",
+ "softblit-native",
+ "tracing",
+ "tracing-subscriber",
+ "wgpu",
+]
+
+[[package]]
 name = "softblit-native"
 version = "1.0.0-alpha.1"
 dependencies = [
@@ -1698,6 +1738,15 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "strck"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42316e70da376f3d113a68d138a60d8a9883c604fe97942721ec2068dab13a9f"
+dependencies = [
+ "unicode-ident",
+]
 
 [[package]]
 name = "strict-num"
