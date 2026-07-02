@@ -363,6 +363,21 @@ impl SharedSurface for VulkanSharedSurface {
 
         self.free_image_resources();
 
+        // Rebuild hands the consumer a fresh surface, so give it fresh unsignalled sync objects too;
+        // reusing binary semaphores whose last signal the old (torn-down) consumer never waited on
+        // would leave them in an ambiguous signalled state.
+        // SAFETY: the queue is idle (drained above), so no submission still references these.
+        unsafe {
+            self.vk.device.destroy_semaphore(self.render_finished, None);
+            self.vk.device.destroy_semaphore(self.image_available, None);
+        }
+        close_nt_handle(self.render_finished_handle);
+        close_nt_handle(self.image_available_handle);
+        let (render_finished, render_finished_handle) =
+            create_exportable_semaphore(&self.vk).expect("recreate render_finished on resize");
+        let (image_available, image_available_handle) =
+            create_exportable_semaphore(&self.vk).expect("recreate image_available on resize");
+
         let (image_memory, memory_size, memory_handle, wgpu_texture) =
             create_shared_image(&self.vk, &self.device, width, height)
                 .expect("recreate exportable Vulkan image on resize");
@@ -381,6 +396,10 @@ impl SharedSurface for VulkanSharedSurface {
         self.image_memory = image_memory;
         self.memory_size = memory_size;
         self.memory_handle = memory_handle;
+        self.render_finished = render_finished;
+        self.image_available = image_available;
+        self.render_finished_handle = render_finished_handle;
+        self.image_available_handle = image_available_handle;
         self.wgpu_texture = Some(wgpu_texture);
         self.first_frame.set(true);
     }
@@ -634,7 +653,10 @@ fn record_transition(
     old_layout: vk::ImageLayout,
     new_layout: vk::ImageLayout,
 ) -> Result<(), NativeError> {
-    let begin_info = vk::CommandBufferBeginInfo::default();
+    // The three barrier CBs are static and resubmitted every frame while a prior submit may still be
+    // pending, so they must allow simultaneous use (VUID-vkQueueSubmit-pCommandBuffers-00071).
+    let begin_info = vk::CommandBufferBeginInfo::default()
+        .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE);
     let barrier = vk::ImageMemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
         .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
