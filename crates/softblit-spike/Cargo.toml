@@ -15,3 +15,6 @@ wgpu = { workspace = true, features = ["vulkan", "dx12"] }
 pollster = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Threading"] }

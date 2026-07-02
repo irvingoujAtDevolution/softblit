@@ -19,6 +19,7 @@
 use std::cell::Cell;
 
 use ash::vk;
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 
 use crate::{NativeError, SharedFormat, SharedHandle, SharedSurface, SyncKind};
 
@@ -36,6 +37,20 @@ const HANDOFF_LAYOUT: vk::ImageLayout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
 
 fn vk_err(context: &'static str) -> impl FnOnce(vk::Result) -> NativeError {
     move |e| NativeError::Unsupported(format!("{context}: {e:?}"))
+}
+
+/// Closes an exported OPAQUE_WIN32 NT handle. The consumer's imported Vulkan object holds its own
+/// kernel reference, so releasing our copy once we tear the resource down is what keeps a
+/// long-running session (which reallocates on every resize) from leaking a handle per frame-size.
+fn close_nt_handle(handle: isize) {
+    if handle == 0 {
+        return;
+    }
+    // SAFETY: `handle` is an NT handle we own (from vkGet{Memory,Semaphore}Win32HandleKHR); closing
+    // our copy does not affect the consumer's independently-referenced imported object.
+    unsafe {
+        let _ = CloseHandle(HANDLE(handle as *mut _));
+    }
 }
 
 /// Builds a wgpu device on the Vulkan backend with **both** `VK_KHR_external_memory_win32` (via the
@@ -280,8 +295,9 @@ impl VulkanSharedSurface {
         }
     }
 
-    /// Drops the wgpu texture (destroying its `VkImage`), flushes wgpu's deferred destruction, then
-    /// frees the image memory. Semaphores/pool are left for the caller.
+    /// Drops the wgpu texture (destroying its `VkImage`), flushes wgpu's deferred destruction, frees
+    /// the image memory, and closes the memory's exported NT handle. Semaphores/pool are left for the
+    /// caller.
     fn free_image_resources(&mut self) {
         drop(self.wgpu_texture.take());
         self.device
@@ -292,6 +308,8 @@ impl VulkanSharedSurface {
         unsafe {
             self.vk.device.free_memory(self.image_memory, None);
         }
+        close_nt_handle(self.memory_handle);
+        self.memory_handle = 0;
     }
 }
 
@@ -382,6 +400,8 @@ impl Drop for VulkanSharedSurface {
             self.vk.device.destroy_semaphore(self.render_finished, None);
             self.vk.device.destroy_semaphore(self.image_available, None);
         }
+        close_nt_handle(self.render_finished_handle);
+        close_nt_handle(self.image_available_handle);
     }
 }
 
@@ -473,7 +493,7 @@ fn create_shared_image(
             .memory(memory)
             .handle_type(HANDLE_TYPE);
         // SAFETY: `memory` was allocated exportable with OPAQUE_WIN32; the returned NT handle is
-        // owned by the caller and handed to the importer (leaked for the spike's lifetime).
+        // owned by us, handed to the importer, and closed in `free_image_resources` on teardown.
         let handle = unsafe { vk.mem_win32.get_memory_win32_handle(&get_info) }
             .map_err(vk_err("vkGetMemoryWin32HandleKHR"))?;
 
