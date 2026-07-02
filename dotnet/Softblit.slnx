@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Softblit.Avalonia/Softblit.Avalonia.csproj" />
+  <Project Path="Softblit.Demo/Softblit.Demo.csproj" />
+  <Project Path="Softblit.Interop/Softblit.Interop.csproj" />
+</Solution>

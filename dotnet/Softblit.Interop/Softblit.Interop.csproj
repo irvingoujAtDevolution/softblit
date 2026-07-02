@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Path to the Rust cdylib; copied next to every consumer's output if it exists. Override with
+         -p:SoftblitFfiDll=... . Honors CARGO_TARGET_DIR (this machine redirects it), else the
+         in-tree target dir. -->
+    <SoftblitFfiDll Condition="'$(SoftblitFfiDll)' == '' and '$(CARGO_TARGET_DIR)' != ''">$(CARGO_TARGET_DIR)\debug\softblit_ffi.dll</SoftblitFfiDll>
+    <SoftblitFfiDll Condition="!Exists('$(SoftblitFfiDll)')">D:\Dev\build\cargo-target-ffi\debug\softblit_ffi.dll</SoftblitFfiDll>
+    <SoftblitFfiDll Condition="!Exists('$(SoftblitFfiDll)')">D:\Dev\build\cargo-target\debug\softblit_ffi.dll</SoftblitFfiDll>
+    <SoftblitFfiDll Condition="!Exists('$(SoftblitFfiDll)')">$(MSBuildThisFileDirectory)..\..\target\debug\softblit_ffi.dll</SoftblitFfiDll>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(SoftblitFfiDll)')">
+    <Content Include="$(SoftblitFfiDll)">
+      <Link>softblit_ffi.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
