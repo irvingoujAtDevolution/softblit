@@ -2,4 +2,5 @@
   <Project Path="Softblit.Avalonia/Softblit.Avalonia.csproj" />
   <Project Path="Softblit.Demo/Softblit.Demo.csproj" />
   <Project Path="Softblit.Interop/Softblit.Interop.csproj" />
+  <Project Path="Softblit.IronVncDemo/Softblit.IronVncDemo.csproj" />
 </Solution>

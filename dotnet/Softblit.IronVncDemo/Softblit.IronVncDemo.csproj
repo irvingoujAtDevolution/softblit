@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <!-- Avalonia versions aligned with Softblit.Avalonia (the source of truth) to avoid conflicts. -->
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.18" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.18" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.18" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Softblit.Avalonia\Softblit.Avalonia.csproj" />
+    <ProjectReference Include="D:\IronVNC\ffi\dotnet\Devolutions.IronVnc\Devolutions.IronVnc.csproj" />
+  </ItemGroup>
+
+  <!-- The bindings' Build.props marks the native dll CopyToOutputDirectory=Never (it copies only
+       when packed into a NuGet), so a project-reference does not bring it along. Copy it explicitly
+       next to the exe. softblit_ffi.dll flows transitively from Softblit.Interop's Content item. -->
+  <ItemGroup>
+    <Content Include="D:\IronVNC\dependencies\runtimes\win-x64\native\DevolutionsIronVnc.dll">
+      <Link>DevolutionsIronVnc.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
