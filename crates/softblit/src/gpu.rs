@@ -1089,11 +1089,22 @@ impl GpuState {
         }
     }
 
+    /// Avalonia's Vulkan compositor samples the imported external texture with the opposite Y
+    /// convention, so the external path otherwise composites vertically flipped; negating NDC-y
+    /// corrects it. The swapchain/web path is presented directly and stays as-is.
+    fn ndc_y_sign(&self) -> f32 {
+        match self.target {
+            BlitTarget::External { .. } => -1.0,
+            BlitTarget::Swapchain { .. } => 1.0,
+        }
+    }
+
     fn write_blit_params(&self) {
         let (sx, sy) = self.scaling.ndc_scale(
             (self.source_width, self.source_height),
             self.target_size(),
         );
+        let sy = sy * self.ndc_y_sign();
         let mut data = [0u8; BLIT_UNIFORM_SIZE as usize];
         data[0..4].copy_from_slice(&sx.to_le_bytes());
         data[4..8].copy_from_slice(&sy.to_le_bytes());
@@ -1112,6 +1123,7 @@ impl GpuState {
             (self.source_width, self.source_height),
             self.target_size(),
         );
+        let sy = sy * self.ndc_y_sign();
         let (sw, sh) = (self.source_width as f32, self.source_height as f32);
         // Source-space center and half-extent of the overlay quad.
         let cx = overlay.x as f32 + overlay.width as f32 / 2.0;
