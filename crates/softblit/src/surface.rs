@@ -60,6 +60,30 @@ impl Surface {
         Self::from_wgpu_target(target.into(), target_size, desc).await
     }
 
+    /// Creates a surface whose final blit renders into an externally-provided `wgpu::Texture`
+    /// (shared with another API, e.g. Avalonia's compositor) using a caller-provided
+    /// `device`/`queue`. The texture's format is authoritative for the blit pipeline and it must
+    /// be created with `RENDER_ATTACHMENT` usage; its size is the target (presentation) size.
+    ///
+    /// There is no swapchain: a frame is "presented" when [`Surface::present`] /
+    /// [`Surface::present_external`] submits the encoder. A later layer signals a cross-API sync
+    /// object around that submission. On a target resize the owner reallocates the shared texture;
+    /// call [`Surface::resize_target`] to track the new size.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_shared(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        target: wgpu::Texture,
+        desc: SurfaceDescriptor,
+    ) -> Result<Self, Error> {
+        let gpu = GpuState::new_external(device, queue, target, &desc);
+        Ok(Self {
+            gpu,
+            framebuffer: Vec::new(),
+            dirty: Vec::new(),
+        })
+    }
+
     async fn from_wgpu_target(
         target: wgpu::SurfaceTarget<'static>,
         target_size: (u32, u32),

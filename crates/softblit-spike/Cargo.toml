@@ -1,0 +1,17 @@
+[package]
+name = "softblit-spike"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Phase-0 throwaway spike: a C-ABI producer that renders a moving gradient into a shared surface for an Avalonia consumer to composite."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+softblit-native = { path = "../softblit-native" }
+wgpu = { workspace = true, features = ["vulkan", "dx12"] }
+pollster = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

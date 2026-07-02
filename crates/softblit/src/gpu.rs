@@ -17,10 +17,9 @@ const UNPACK_PARAMS_SIZE: u64 = 48;
 const UNPACK_UNIFORM_STRIDE: u64 = 256;
 
 pub(crate) struct GpuState {
-    surface: wgpu::Surface<'static>,
+    target: BlitTarget,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
 
     source_width: u32,
     source_height: u32,
@@ -53,6 +52,29 @@ pub(crate) struct GpuState {
     /// The swapchain must be redrawn even if no source bytes changed
     /// (initial frame, target resize, scaling change, overlay change, VideoFrame import).
     needs_redraw: bool,
+}
+
+/// Destination of the final blit pass.
+enum BlitTarget {
+    /// A wgpu swapchain softblit creates and owns: acquire a frame, blit, `present()`.
+    Swapchain {
+        surface: wgpu::Surface<'static>,
+        config: wgpu::SurfaceConfiguration,
+    },
+    /// An externally-owned texture (shared with another API, e.g. Avalonia's compositor): the
+    /// blit renders into `view`; "present" is just submitting the encoder — a later layer signals
+    /// a cross-API sync object around that submit.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    External {
+        // Held to keep the shared texture alive for the lifetime of its view.
+        #[allow(dead_code)]
+        texture: wgpu::Texture,
+        view: wgpu::TextureView,
+        // Mirrors the pipeline's color-target format, fixed at construction.
+        #[allow(dead_code)]
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+    },
 }
 
 enum SourceResources {
@@ -142,6 +164,55 @@ impl GpuState {
             .flags
             .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS);
 
+        Self::build(
+            device,
+            queue,
+            compute_available,
+            format,
+            BlitTarget::Swapchain { surface, config },
+            desc,
+        )
+    }
+
+    /// Native constructor: renders the final blit into an externally-owned `wgpu::Texture`
+    /// (shared with another API) using a caller-provided device/queue. The texture's format is
+    /// authoritative for the blit pipeline's color target. Native adapters always support compute
+    /// shaders, so the compute-unpack path is always available on this path.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn new_external(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        texture: wgpu::Texture,
+        desc: &SurfaceDescriptor,
+    ) -> Self {
+        let format = texture.format();
+        let size = (texture.width(), texture.height());
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self::build(
+            device,
+            queue,
+            true,
+            format,
+            BlitTarget::External {
+                texture,
+                view,
+                format,
+                size,
+            },
+            desc,
+        )
+    }
+
+    /// Builds all pipelines/bind groups/buffers shared by both constructors. `blit_format` is the
+    /// color-target format of the final blit (swapchain-chosen or the external texture's format).
+    fn build(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        compute_available: bool,
+        blit_format: wgpu::TextureFormat,
+        target: BlitTarget,
+        desc: &SurfaceDescriptor,
+    ) -> Self {
         let blit_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/blit.wgsl"));
 
         let blit_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -202,7 +273,7 @@ impl GpuState {
                     entry_point: Some("fs_main"),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format,
+                        format: blit_format,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -327,10 +398,9 @@ impl GpuState {
         );
 
         Self {
-            surface,
+            target,
             device,
             queue,
-            config,
             source_width,
             source_height,
             format: desc.format,
@@ -359,7 +429,10 @@ impl GpuState {
     }
 
     pub(crate) fn target_size(&self) -> (u32, u32) {
-        (self.config.width, self.config.height)
+        match &self.target {
+            BlitTarget::Swapchain { config, .. } => (config.width, config.height),
+            BlitTarget::External { size, .. } => *size,
+        }
     }
 
     pub(crate) fn format(&self) -> PixelFormat {
@@ -385,9 +458,15 @@ impl GpuState {
     }
 
     pub(crate) fn resize_target(&mut self, width: u32, height: u32) {
-        self.config.width = width.max(1);
-        self.config.height = height.max(1);
-        self.surface.configure(&self.device, &self.config);
+        match &mut self.target {
+            BlitTarget::Swapchain { surface, config } => {
+                config.width = width.max(1);
+                config.height = height.max(1);
+                surface.configure(&self.device, config);
+            }
+            // The shared texture is reallocated by its owner; only track the new size.
+            BlitTarget::External { size, .. } => *size = (width.max(1), height.max(1)),
+        }
         self.params_dirty = true;
         self.needs_redraw = true;
     }
@@ -602,7 +681,12 @@ impl GpuState {
             upload = self.upload(bytes, &rects);
         }
 
-        let frame = self.acquire_frame()?;
+        // The external path has no swapchain to acquire; it blits into its stored view.
+        let frame = if matches!(self.target, BlitTarget::Swapchain { .. }) {
+            self.acquire_frame()?
+        } else {
+            None
+        };
 
         if self.params_dirty {
             self.write_blit_params();
@@ -649,33 +733,39 @@ impl GpuState {
             }
         }
 
-        if let Some(frame) = &frame {
-            let view = frame
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("softblit blit"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.blit_pipeline);
-            pass.set_bind_group(0, &self.blit_bind_group, &[]);
-            pass.draw(0..4, 0..1);
-            if let Some(overlay) = &self.overlay {
-                pass.set_pipeline(&self.overlay_pipeline);
-                pass.set_bind_group(0, &overlay.bind_group, &[]);
+        {
+            let swapchain_view = frame
+                .as_ref()
+                .map(|f| f.texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            let view: Option<&wgpu::TextureView> = match &self.target {
+                BlitTarget::External { view, .. } => Some(view),
+                BlitTarget::Swapchain { .. } => swapchain_view.as_ref(),
+            };
+            if let Some(view) = view {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("softblit blit"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.blit_pipeline);
+                pass.set_bind_group(0, &self.blit_bind_group, &[]);
                 pass.draw(0..4, 0..1);
+                if let Some(overlay) = &self.overlay {
+                    pass.set_pipeline(&self.overlay_pipeline);
+                    pass.set_bind_group(0, &overlay.bind_group, &[]);
+                    pass.draw(0..4, 0..1);
+                }
             }
         }
 
@@ -685,9 +775,13 @@ impl GpuState {
                 frame.present();
                 self.needs_redraw = false;
             }
-            // Frame unavailable (occluded/timeout): the uploads and unpack still ran, so the
-            // persistent texture is current; redo only the blit once a frame is available.
-            None => self.needs_redraw = true,
+            None => match &self.target {
+                // External: submitting the encoder is the "present".
+                BlitTarget::External { .. } => self.needs_redraw = false,
+                // Swapchain frame unavailable (occluded/timeout): the uploads and unpack still
+                // ran, so the persistent texture is current; redo only the blit once available.
+                BlitTarget::Swapchain { .. } => self.needs_redraw = true,
+            },
         }
 
         Ok(PresentStats {
@@ -700,12 +794,15 @@ impl GpuState {
     /// `Ok(None)` means "skip presenting this call, retry later" (occluded window, timeout).
     fn acquire_frame(&mut self) -> Result<Option<wgpu::SurfaceTexture>, Error> {
         use wgpu::CurrentSurfaceTexture as Cst;
-        match self.surface.get_current_texture() {
+        let BlitTarget::Swapchain { surface, config } = &self.target else {
+            unreachable!("acquire_frame is only called on the swapchain path");
+        };
+        match surface.get_current_texture() {
             Cst::Success(frame) | Cst::Suboptimal(frame) => Ok(Some(frame)),
             Cst::Lost | Cst::Outdated => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, config);
                 self.needs_redraw = true;
-                match self.surface.get_current_texture() {
+                match surface.get_current_texture() {
                     Cst::Success(frame) | Cst::Suboptimal(frame) => Ok(Some(frame)),
                     Cst::Timeout | Cst::Occluded => Ok(None),
                     Cst::Lost | Cst::Outdated | Cst::Validation => Err(Error::SurfaceLost),
@@ -995,7 +1092,7 @@ impl GpuState {
     fn write_blit_params(&self) {
         let (sx, sy) = self.scaling.ndc_scale(
             (self.source_width, self.source_height),
-            (self.config.width, self.config.height),
+            self.target_size(),
         );
         let mut data = [0u8; BLIT_UNIFORM_SIZE as usize];
         data[0..4].copy_from_slice(&sx.to_le_bytes());
@@ -1013,7 +1110,7 @@ impl GpuState {
         };
         let (sx, sy) = self.scaling.ndc_scale(
             (self.source_width, self.source_height),
-            (self.config.width, self.config.height),
+            self.target_size(),
         );
         let (sw, sh) = (self.source_width as f32, self.source_height as f32);
         // Source-space center and half-extent of the overlay quad.

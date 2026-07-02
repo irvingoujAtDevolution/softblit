@@ -1,0 +1,30 @@
+[package]
+name = "softblit-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Platform GPU-texture sharing for softblit: allocate a GPU texture visible to both wgpu and a native compositor (Windows D3D11 keyed-mutex; Linux/macOS later)."
+
+[dependencies]
+wgpu = { workspace = true, features = ["vulkan", "dx12"] }
+tracing = "0.1"
+
+# Pinned to the exact `ash` wgpu-hal 29 links, so raw Vulkan handle types are ABI-identical across
+# the `device.as_hal::<Vulkan>()` boundary.
+[target.'cfg(windows)'.dependencies.ash]
+version = "=0.38.0"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+] }
+windows-core = "0.62"
+
+[dev-dependencies]
+pollster = "0.4"
