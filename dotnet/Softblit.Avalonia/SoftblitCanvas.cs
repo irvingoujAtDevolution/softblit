@@ -43,6 +43,10 @@ public sealed class SoftblitCanvas : Control
     private SoftblitScaling _scaling = SoftblitScaling.Fit;
     private PixelSize? _pendingSourceSize;
 
+    // Reused across presents (Present is UI-thread-only and the FFI consumes the rects synchronously)
+    // so the common single-rect / full-frame present allocates nothing.
+    private uint[] _rectScratch = new uint[4];
+
     /// Raised on the UI thread once the shared surface is created and imported and the canvas is
     /// ready to accept <see cref="Present"/> calls.
     public event EventHandler? Ready;
@@ -202,7 +206,10 @@ public sealed class SoftblitCanvas : Control
     /// Uploads a frame and composites it. If <paramref name="dirty"/> is empty a single full-source
     /// rect is sent. Returns the upload accounting; if the canvas is not yet ready or a previous
     /// present is still committing, the frame is skipped.
-    public SoftblitPresentStats Present(ReadOnlySpan<byte> frame, ReadOnlySpan<PixelRect> dirty = default)
+    /// Zero-copy fast path: the caller's framebuffer is handed straight to the FFI (the generated
+    /// binding pins it), and the dirty rects reuse a scratch buffer, so a steady-state present
+    /// allocates nothing on the managed heap. Callers holding a <c>byte[]</c> bind here automatically.
+    public SoftblitPresentStats Present(byte[] frame, ReadOnlySpan<PixelRect> dirty = default)
     {
         if (!_ready || _busy || _surface == null || _image == null)
             return new SoftblitPresentStats { Skipped = true };
@@ -210,7 +217,7 @@ public sealed class SoftblitCanvas : Control
         EnsureTargetSize();
 
         var rects = BuildRects(dirty);
-        var stats = SoftblitPresentStats.FromFfi(_surface.Present(frame.ToArray(), rects));
+        var stats = SoftblitPresentStats.FromFfi(_surface.Present(frame, rects));
         LastPresentStats = stats;
 
         _busy = true;
@@ -218,12 +225,25 @@ public sealed class SoftblitCanvas : Control
         return stats;
     }
 
+    /// Convenience overload for callers that only have a span; it copies into a managed array. Prefer
+    /// the <c>byte[]</c> overload on a hot path to avoid the per-present copy.
+    public SoftblitPresentStats Present(ReadOnlySpan<byte> frame, ReadOnlySpan<PixelRect> dirty = default)
+        => Present(frame.ToArray(), dirty);
+
     private uint[] BuildRects(ReadOnlySpan<PixelRect> dirty)
     {
-        if (dirty.IsEmpty)
-            return new uint[] { 0, 0, (uint)_sourceSize.Width, (uint)_sourceSize.Height };
+        var count = dirty.IsEmpty ? 1 : dirty.Length;
+        var rects = count == 1 ? _rectScratch : new uint[count * 4];
 
-        var rects = new uint[dirty.Length * 4];
+        if (dirty.IsEmpty)
+        {
+            rects[0] = 0;
+            rects[1] = 0;
+            rects[2] = (uint)_sourceSize.Width;
+            rects[3] = (uint)_sourceSize.Height;
+            return rects;
+        }
+
         for (var i = 0; i < dirty.Length; i++)
         {
             var r = dirty[i];
